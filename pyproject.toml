@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evidence"
+version = "0.1.0"
+description = "Specification-based property testing for Python"
+requires-python = ">=3.10"
+dependencies = [
+    "hypothesis>=6.151.4",
+    "sortedcontainers>=2.4.0",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.9", "mypy>=1.14"]
+coverage = ["coverage>=7.0"]
+prove = ["hypothesis-crosshair>=0.0.18", "crosshair-tool>=0.0.77"]
+suggest = ["anthropic>=0.40"]
+numeric = ["numpy>=1.24", "pandas>=2.0"]
+ml = ["torch>=2.0"]
+all = [
+    "coverage>=7.0",
+    "hypothesis-crosshair>=0.0.18",
+    "crosshair-tool>=0.0.77",
+    "anthropic>=0.40",
+    "numpy>=1.24",
+    "pandas>=2.0",
+]
+
+[project.scripts]
+evidence = "evidence._cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evidence"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
