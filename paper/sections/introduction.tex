@@ -1,0 +1,126 @@
+\section{Introduction}
+\label{sec:introduction}
+
+LLM-based coding agents are rapidly transforming software
+development. Tools such as Claude Code, GitHub Copilot, Cursor, and
+Devin generate, modify, and debug code with increasing autonomy.
+Developers now routinely delegate implementation tasks to agents,
+reviewing the results rather than writing every line by hand. A
+recent GitHub survey reports that 92\% of U.S.-based developers use AI
+coding tools~\cite{github-survey}.
+
+The central unsolved problem is \emph{correctness}. A coding agent can
+produce plausible-looking code that passes superficial review but
+contains subtle bugs---off-by-one errors, missing edge cases, numeric
+instability, incorrect boundary conditions. These are precisely the
+defects that are hardest for humans to spot in code review and hardest
+for agents to avoid, because they require exhaustive reasoning about
+input domains that neither humans nor LLMs perform reliably.
+
+The dominant approach to verifying agent-generated code is to have the
+agent also generate unit tests. This approach is fundamentally
+circular: the tests encode the same assumptions as the
+implementation. If the agent misunderstands the specification---for
+example, believing that adjacent intervals need not be merged---it
+will write both a buggy implementation and a test suite that passes on
+it. Pythoness~\cite{pythoness} and CoverUp~\cite{coverup}
+demonstrate that LLM-generated tests can achieve high code coverage,
+but coverage does not imply correctness. An agent that writes
+\texttt{assert sort([3,1,2]) == [3,1,2]} achieves 100\% coverage of a
+buggy sort without detecting the bug.
+
+Property-based testing tools~\cite{hypothesis, quickcheck} offer a
+stronger alternative by checking universally quantified properties
+over randomly generated inputs, but they require the developer to
+write generators and property functions---a task that is tedious even
+for experienced programmers and beyond the reliable capabilities of
+current agents. Design by Contract~\cite{designbycontract, eiffel}
+provides a complementary approach through preconditions and
+postconditions, but existing Python contract
+libraries~\cite{icontract, deal} check contracts only on inputs that
+arise during normal execution. They do not actively search for
+violations.
+
+This paper presents Evidence, a Python framework that gives coding
+agents a principled mechanism for verifying their own output.
+Evidence exploits a key asymmetry: \emph{specifications are simpler
+  than implementations}. A reference specification for sorting is
+\texttt{sorted(xs)}; a reference specification for interval
+normalization expands intervals to points and compresses them back.
+These specifications are short, obviously correct, and easy for a
+human to audit---even when the efficient implementation they validate
+is complex and subtle. An agent (or a developer) writes a
+specification and a set of contracts using five
+decorators---\dmark{spec}, \dmark{against}, \dmark{requires},
+\dmark{ensures}, and \dmark{pure}---and Evidence does the rest.
+
+Evidence automatically synthesizes
+Hypothesis~\cite{hypothesis} strategies from Python type annotations,
+supporting primitives, generic collections, unions, dataclasses, and
+user-registered custom types. For each annotated function, Evidence
+executes a two-phase testing protocol: a fast smoke test that
+validates contracts on a single satisfying input, followed by a
+counterexample search that combines a deterministic probe via
+\texttt{hypothesis.find} with a randomized \texttt{@given}-based
+search that leverages Hypothesis's built-in shrinking to produce
+minimal failing inputs. Evidence returns results as structured JSON,
+enabling agents to parse counterexamples, diagnose failures, and
+iterate programmatically.
+
+Beyond testing, Evidence integrates three analyses that are
+particularly valuable in an agent workflow.
+%
+First, AST-based mutation testing with seven operators quantifies
+specification strength: a high mutation score confirms that the
+contracts are strong enough to catch a wide class of errors, not just
+the specific inputs the agent happened to consider.
+%
+Second, purity analysis combines static AST inspection with dynamic
+verification to detect side effects and nondeterminism---common
+failure modes in agent-generated code.
+%
+Third, structural property inference automatically discovers
+properties such as shape preservation, idempotence, and sortedness,
+which an agent can incorporate as additional postconditions without
+human guidance.
+
+Evidence optionally integrates with CrossHair~\cite{crosshair} for
+symbolic verification and with large language models for specification
+mining, enabling agents to bootstrap contracts for functions that lack
+them.
+
+On a suite of ten example modules containing 21 annotated functions
+with deliberately injected bugs spanning off-by-one errors, missing
+edge cases, numeric instability, and incorrect data structure
+operations, Evidence detects every seeded defect. Evidence produces
+minimal shrunk counterexamples that pinpoint the root cause, and
+achieves mutation scores above 80\% for functions with well-specified
+contracts.
+
+This paper makes the following contributions:
+
+\begin{enumerate}
+\item It identifies specification-based verification as the right
+  abstraction for coding agents, exploiting the asymmetry between
+  simple specifications and complex
+  implementations~(\S\ref{sec:example}).
+
+\item It presents Evidence, a unified framework that combines
+  contracts, specification equivalence testing, and property-based
+  testing with a declarative API and structured JSON output designed
+  for agent integration~(\S\ref{sec:design}).
+
+\item It describes a two-phase testing protocol that produces minimal
+  shrunk counterexamples suitable for automated
+  diagnosis~(\S\ref{sec:implementation}).
+
+\item It introduces integrated mutation testing, purity analysis, and
+  property inference as mechanisms for agents to assess and
+  strengthen specification quality without human
+  intervention~(\S\ref{sec:implementation}).
+
+\item It evaluates Evidence on a diverse suite of ten buggy Python
+  modules, demonstrating that the framework detects all seeded
+  defects and produces actionable
+  diagnostics~(\S\ref{sec:evaluation}).
+\end{enumerate}

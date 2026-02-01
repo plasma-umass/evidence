@@ -1,0 +1,23 @@
+LLM-based coding agents now generate substantial amounts of Python
+code, but no existing tool gives these agents a reliable, automated
+way to verify the correctness of the code they produce. Unit tests are
+the dominant approach, but LLM-generated tests often mirror the same
+misconceptions as the generated code, providing a false sense of
+assurance. Evidence is a Python framework designed to close this gap.
+A developer (or an agent) writes a short declarative specification
+using five decorators---preconditions (\dmark{requires}),
+postconditions (\dmark{ensures}), purity assertions (\dmark{pure}),
+reference specifications (\dmark{spec}), and equivalence declarations
+(\dmark{against})---and Evidence automatically synthesizes Hypothesis
+strategies from type annotations, generates test inputs, and searches
+for counterexamples via a two-phase protocol combining deterministic
+probing with randomized search. Because specifications are simpler
+than implementations, they are easier for both agents to write and
+humans to audit. Evidence returns structured JSON output with minimal
+shrunk counterexamples, enabling an agent to diagnose failures and
+iterate without human intervention. Evidence also integrates AST-based
+mutation testing to quantify specification strength, purity analysis,
+and structural property inference. On a suite of ten Python modules
+containing 21 annotated functions with deliberately injected bugs,
+Evidence detects every seeded defect and produces counterexamples
+small enough to drive automated repair.

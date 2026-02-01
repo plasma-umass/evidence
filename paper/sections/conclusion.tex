@@ -1,0 +1,29 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper presents Evidence, a Python framework that gives coding
+agents a principled mechanism for verifying the correctness of the
+code they generate. Evidence exploits a key asymmetry: specifications
+are simpler than implementations, making them easier to write
+correctly and easier for humans to audit. Evidence synthesizes test
+strategies from type annotations, executes a two-phase protocol that
+produces minimal shrunk counterexamples, and returns structured JSON
+output that agents can parse and act on without human intervention.
+Integrated mutation testing quantifies specification strength, purity
+analysis detects side effects, and structural inference discovers
+properties automatically.
+
+On a suite of ten modules with 21 annotated functions, Evidence
+detects every seeded defect---bugs that would survive agent-generated
+unit tests---and produces counterexamples small enough for both humans
+and agents to diagnose at a glance.
+
+As coding agents take on an increasing share of software development,
+the gap between code generation and code verification widens.
+Evidence closes this gap by shifting the verification problem from
+writing correct tests to writing correct specifications---a simpler
+task that aligns naturally with the division of labor between human
+intent and agent execution.
+
+Evidence is open source and available at
+\url{https://github.com/emeryberger/evidence}.

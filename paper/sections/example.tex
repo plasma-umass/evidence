@@ -1,0 +1,162 @@
+\section{Motivating Example}
+\label{sec:example}
+
+This section illustrates Evidence's approach with a concrete scenario:
+a coding agent generates a buggy implementation, and Evidence
+automatically detects the defect with a minimal counterexample that
+the agent can use to repair its code.
+
+\subsection{The Agent Workflow}
+
+Consider a developer who asks a coding agent to implement a function
+that normalizes a list of integer intervals---merging overlapping and
+adjacent intervals into a minimal, sorted, disjoint representation.
+For instance, \texttt{[(1,3), (2,5), (7,9)]} should produce
+\texttt{[(1,5), (7,9)]}, and \texttt{[(1,2), (3,4)]} should produce
+\texttt{[(1,4)]} because the intervals are adjacent.
+
+The developer provides a specification and contracts using Evidence
+decorators (Figure~\ref{fig:example-spec}). The \dmark{spec} decorator
+marks \texttt{normalize\_spec} as ground truth. This implementation
+expands every interval into its constituent points, collects them into
+a set, and compresses maximal runs back into intervals. The
+specification is obviously correct but $O(n \cdot r)$ where $r$ is the
+range span---too slow for production use. The developer asks the agent
+to write an efficient $O(n \log n)$ implementation that satisfies the
+contracts and matches the specification.
+
+\begin{figure}[t]
+\begin{lstlisting}[language=Python]
+from evidence import spec, against, requires, ensures
+
+Interval = tuple[int, int]
+
+@spec
+def normalize_spec(xs: list[Interval]) -> list[Interval]:
+    pts = set()
+    for lo, hi in xs:
+        for v in range(lo, hi + 1):
+            pts.add(v)
+    if not pts:
+        return []
+    s = sorted(pts)
+    out, cur_lo, cur_hi = [], s[0], s[0]
+    for v in s[1:]:
+        if v == cur_hi + 1:
+            cur_hi = v
+        else:
+            out.append((cur_lo, cur_hi))
+            cur_lo, cur_hi = v, v
+    out.append((cur_lo, cur_hi))
+    return out
+\end{lstlisting}
+\caption{A reference specification for interval normalization. The
+  \dmark{spec} decorator marks this function as ground truth. A
+  developer writes this short, obviously-correct specification; the
+  agent's task is to produce an efficient implementation that matches
+  it.}
+\label{fig:example-spec}
+\end{figure}
+
+\subsection{The Agent's Buggy Output}
+
+Figure~\ref{fig:example-impl} shows the implementation the agent
+produces. The agent correctly identifies the sort-and-sweep algorithm,
+adds appropriate \dmark{requires} and \dmark{ensures} decorators, and
+links the implementation to the specification via \dmark{against}.
+However, the merge condition on line~13 uses \texttt{lo <= cur\_hi}
+instead of the correct \texttt{lo <= cur\_hi + 1}. This off-by-one
+error causes adjacent (but non-overlapping) intervals to remain
+unmerged---a subtle bug that passes the agent's own unit tests because
+the agent tested overlapping and disjoint intervals but not the
+boundary case.
+
+\begin{figure}[t]
+\begin{lstlisting}[language=Python]
+@requires(lambda xs: all(lo <= hi for lo, hi in xs))
+@requires(lambda xs: len(xs) <= 12)
+@requires(lambda xs: all(-10 <= lo <= 10
+                     and -10 <= hi <= 10
+                     for lo, hi in xs))
+@against(normalize_spec, max_examples=500)
+@ensures(lambda xs, result:
+    all(lo <= hi for lo, hi in result))
+@ensures(lambda xs, result:
+    is_sorted_disjoint(result))
+def normalize(xs: list[Interval]) -> list[Interval]:
+    if not xs:
+        return []
+    ys = sorted(xs, key=lambda p: (p[0], p[1]))
+    out = []
+    cur_lo, cur_hi = ys[0]
+    for lo, hi in ys[1:]:
+        if lo <= cur_hi:       # BUG: should be cur_hi + 1
+            if hi > cur_hi:
+                cur_hi = hi
+        else:
+            out.append((cur_lo, cur_hi))
+            cur_lo, cur_hi = lo, hi
+    out.append((cur_lo, cur_hi))
+    return out
+\end{lstlisting}
+\caption{An agent-generated implementation of interval normalization.
+  The merge condition on line~13 uses \texttt{lo <= cur\_hi} instead
+  of \texttt{lo <= cur\_hi + 1}, causing adjacent intervals to remain
+  unmerged. The agent's own unit tests do not cover this case.}
+\label{fig:example-impl}
+\end{figure}
+
+\subsection{Why Unit Tests Fail Here}
+
+If the agent generates its own test suite, it will likely test
+overlapping intervals (\texttt{[(1,3), (2,5)]}) and disjoint
+intervals (\texttt{[(1,2), (5,6)]})---and both pass. The adjacency
+edge case, where one interval ends at $k$ and the next begins at
+$k{+}1$, requires a specific arithmetic relationship between
+interval boundaries that the agent is unlikely to enumerate. This is
+the fundamental problem with LLM-generated tests: the tests reflect
+the agent's understanding, not the ground truth.
+
+\subsection{What Evidence Finds}
+
+The agent runs \texttt{evidence example\_intervals -{}-json} and
+Evidence performs three steps:
+
+\begin{enumerate}
+\item \emph{Strategy synthesis.} Evidence reads the type annotation
+  \texttt{list[Interval]} and the registered strategy for
+  \texttt{Interval} to build a composite Hypothesis strategy over the
+  function's input space.
+
+\item \emph{Smoke test.} Evidence generates one satisfying input,
+  calls \texttt{normalize}, and checks both postconditions. This
+  passes---the bug does not manifest on every input.
+
+\item \emph{Counterexample search.} Evidence uses
+  \texttt{hypothesis.find} to locate an input where
+  \texttt{normalize} and \texttt{normalize\_spec} disagree. Hypothesis
+  finds such an input and shrinks it to a minimal counterexample:
+  \texttt{xs~=~[(0,0),~(1,1)]}. The implementation returns
+  \texttt{[(0,0),~(1,1)]} (two separate intervals), while the
+  specification returns \texttt{[(0,1)]} (one merged interval).
+\end{enumerate}
+
+Evidence returns a JSON result containing the counterexample, the
+implementation output, and the specification output. The agent parses
+this structured feedback and identifies that the two intervals
+\texttt{(0,0)} and \texttt{(1,1)} are adjacent and should merge. The
+agent locates the merge condition, changes \texttt{lo <= cur\_hi} to
+\texttt{lo <= cur\_hi + 1}, and re-runs Evidence. All obligations now
+pass.
+
+\subsection{The Specification Asymmetry}
+
+The key insight underlying this workflow is that \emph{specifications
+  are simpler than implementations}. The reference specification in
+Figure~\ref{fig:example-spec} is 15 lines of straightforward Python
+that a human can verify by inspection. The efficient implementation in
+Figure~\ref{fig:example-impl} is the same length but requires
+careful reasoning about boundary conditions. This asymmetry makes
+Evidence practical for agent workflows: the specification is easy to
+write correctly (for either a human or an agent), easy for a human to
+audit, and sufficient to catch subtle bugs in the implementation.

@@ -1,0 +1,98 @@
+\section{Related Work}
+\label{sec:related}
+
+Evidence draws on and combines ideas from five areas: LLM-based code
+generation, property-based testing, Design by Contract, mutation
+testing, and specification inference.
+
+\paragraph{LLM-based code generation and verification.}
+Coding agents such as Claude Code, GitHub Copilot, and Cursor generate
+code from natural-language prompts, but verifying correctness remains
+an open problem. CoverUp~\cite{coverup} uses LLMs to generate test
+suites with high code coverage, but coverage does not guarantee
+correctness---a test suite can cover every line while encoding
+incorrect expected outputs. Pythoness~\cite{pythoness} generates
+Python implementations from natural-language specifications, validating
+against developer-provided examples, but examples are specific inputs,
+not universal properties. ChatDBG~\cite{chatdbg} integrates LLMs into
+debuggers for post-hoc diagnosis. Evidence addresses a complementary
+problem: \emph{pre-deployment} verification of agent-generated code
+against declarative specifications that are simpler than the
+implementations they validate.
+
+\paragraph{Property-based testing.}
+QuickCheck~\cite{quickcheck} pioneered random property-based testing
+for Haskell, introducing the \texttt{forAll} combinator and automatic
+shrinking. SmallCheck~\cite{smallcheck} complements QuickCheck with
+exhaustive testing over small values.
+Hypothesis~\cite{hypothesis} brought property-based testing to Python
+with a sophisticated strategy library, automatic shrinking, and a
+stateful testing API. Evidence builds directly on Hypothesis, using it
+as the execution engine for strategy synthesis, input generation, and
+counterexample shrinking. Evidence's contribution relative to
+Hypothesis is the declarative contract layer (\dmark{requires},
+\dmark{ensures}, \dmark{against}, \dmark{pure}), automatic strategy
+synthesis from type annotations, and the integration of mutation
+testing and property inference---features that Hypothesis does not
+provide. These additions make property-based testing accessible to
+coding agents that cannot reliably write Hypothesis strategies and
+property functions from scratch.
+
+Randoop~\cite{randoop} generates random sequences of method calls for
+Java, using contracts (via JML annotations~\cite{jml}) to classify
+outputs as passing or failing. Like Evidence, Randoop uses contracts
+as test oracles, but Randoop targets object-oriented method sequences
+while Evidence targets individual functions with specification
+equivalence.
+
+Pynguin~\cite{pynguin} generates unit tests for Python automatically
+using search-based techniques. Unlike Evidence, Pynguin produces
+concrete test cases rather than universally quantified properties, and
+does not use contracts as oracles.
+
+\paragraph{Design by Contract.}
+Meyer's Design by Contract~\cite{designbycontract}, implemented in
+Eiffel~\cite{eiffel}, introduced preconditions, postconditions, and
+class invariants as first-class language features.
+Spec\#~\cite{spec-sharp} and JML~\cite{jml} brought contracts to C\#
+and Java respectively, with static verification support.
+For Python, icontract~\cite{icontract} and deal~\cite{deal} provide
+decorator-based contracts with runtime checking. Evidence differs from
+these tools in three ways: (1)~Evidence actively generates test inputs
+to search for violations, rather than relying on inputs that arise
+during normal execution; (2)~Evidence supports specification
+equivalence testing via \dmark{against}; and (3)~Evidence produces
+structured output designed for programmatic consumption by coding
+agents.
+
+\paragraph{Mutation testing.}
+Mutation testing~\cite{mutation-survey} evaluates test suite quality
+by injecting syntactic faults and checking whether tests detect them.
+mutmut~\cite{mutmut} is a popular mutation testing tool for Python
+that operates at the source level. Evidence's mutation engine
+differs from standalone mutation tools in that it uses the function's
+own contracts and specification as the test oracle, rather than
+requiring a separate test suite. This tight integration enables
+mutation testing as a measure of \emph{specification} quality---a
+signal that coding agents can use to decide whether to request
+additional contracts from the developer.
+
+\paragraph{Specification inference.}
+Daikon~\cite{daikon} infers likely invariants from program traces,
+detecting properties such as non-nullness, ordering, and linear
+relationships. Evidence's property inference engine tests for a
+similar set of structural properties (shape preservation, sortedness,
+idempotence) but uses active hypothesis testing rather than passive
+trace observation. Evidence's optional LLM integration operates in the
+reverse direction from Pythoness~\cite{pythoness}: given an
+implementation, Evidence suggests contracts and specifications rather
+than generating code from specifications.
+
+\paragraph{Formal verification for Python.}
+Dafny~\cite{dafny} demonstrates that contracts and automated theorem
+proving can verify programs with high assurance, though it requires a
+specialized language. CrossHair~\cite{crosshair} applies symbolic
+execution to Python functions, attempting to prove or disprove
+properties expressed as assertions. Evidence optionally integrates
+CrossHair to supplement its randomized testing with symbolic
+verification, bridging the gap between testing and proof.

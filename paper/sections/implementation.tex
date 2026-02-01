@@ -1,0 +1,216 @@
+\section{Implementation}
+\label{sec:implementation}
+
+Evidence is implemented in approximately 1,500 lines of Python
+(excluding tests and examples) with a single required dependency:
+Hypothesis~\cite{hypothesis}. This section describes the key
+implementation mechanisms, focusing on aspects that enable agent
+integration: metadata preservation through decorator chains,
+structured counterexample capture, and specification quality
+assessment via mutation testing.
+
+\subsection{Decorator Chain Metadata}
+\label{sec:bundle}
+
+Python decorators wrap functions in new callables, which complicates
+metadata tracking when multiple decorators are stacked. Evidence
+solves this with a \emph{bundle} mechanism. Each decorated function's
+root (the original, undecorated function) stores a metadata dictionary
+as an attribute (\texttt{\_\_evidence\_bundle\_\_}). This dictionary
+accumulates preconditions, postconditions, specification references,
+and purity annotations across the entire decorator chain.
+
+When Evidence encounters a decorated function, it traverses the
+\texttt{\_\_evidence\_original\_\_} pointer chain to locate the root
+function. The \texttt{\_root\_original} function performs this
+traversal:
+
+\begin{lstlisting}[language=Python]
+def _root_original(fn):
+    cur = fn
+    while True:
+        nxt = getattr(cur, "__evidence_original__", None)
+        if nxt is None:
+            return cur
+        cur = nxt
+\end{lstlisting}
+
+This design ensures that Evidence can always recover the full contract
+specification regardless of decorator ordering or the presence of
+third-party decorators (which may add additional wrapper layers).
+
+\subsection{Precondition Filtering}
+\label{sec:filtering}
+
+Evidence uses Hypothesis's \texttt{assume()} mechanism to filter
+generated inputs that violate preconditions. During both the smoke
+test and the randomized search, Evidence calls each \dmark{requires}
+predicate on the generated input. If any predicate returns
+\texttt{False} or raises an exception, Evidence calls
+\texttt{assume(False)}, causing Hypothesis to discard the input and
+try another.
+
+This approach delegates input filtering to Hypothesis's internal
+machinery, which tracks the filter rate and raises a health check
+warning if too many inputs are discarded. Evidence suppresses the
+\texttt{filter\_too\_much} health check by default, since preconditions
+often constrain the input space substantially.
+
+\subsection{Counterexample Capture and Shrinking}
+\label{sec:shrinking}
+
+Hypothesis's \texttt{@given} decorator automatically shrinks failing
+inputs to a minimal counterexample. Evidence captures the shrunk
+counterexample through a mutable closure variable:
+
+\begin{lstlisting}[language=Python]
+shrunk_ce = [None]
+
+@given(strat_kwargs)
+def prop(kwargs):
+    assume(ok_pre)
+    impl_r = root(**kwargs)
+    spec_r = spec_fn(**kwargs)
+    if not eq(impl_r, spec_r):
+        shrunk_ce[0] = {
+            "kwargs": jsonable(kwargs),
+            "impl_result": jsonable(impl_r),
+            "spec_result": jsonable(spec_r),
+        }
+        raise AssertionError("impl != spec")
+\end{lstlisting}
+
+Hypothesis replays the test with progressively smaller inputs during
+shrinking, updating the closure variable each time. When the
+\texttt{AssertionError} finally propagates, \texttt{shrunk\_ce[0]}
+contains the minimal counterexample.
+
+\subsection{Mutation Testing}
+\label{sec:mutation}
+
+Evidence includes a lightweight, AST-based mutation testing engine
+that requires no external dependencies. The engine implements seven
+mutation operators:
+
+\begin{enumerate}
+\item \textbf{Flip comparisons:}
+  \texttt{==}~$\leftrightarrow$~\texttt{!=},
+  \texttt{<}~$\leftrightarrow$~\texttt{>=},
+  \texttt{>}~$\leftrightarrow$~\texttt{<=},
+  \texttt{is}~$\leftrightarrow$~\texttt{is not},
+  \texttt{in}~$\leftrightarrow$~\texttt{not in}.
+\item \textbf{Swap arithmetic:}
+  \texttt{+}~$\leftrightarrow$~\texttt{-},
+  \texttt{*}~$\leftrightarrow$~\texttt{/},
+  \texttt{//}~$\leftrightarrow$~\texttt{\%}.
+\item \textbf{Negate conditions:}
+  \texttt{if x}~$\rightarrow$~\texttt{if not x}.
+\item \textbf{Delete statements:} replace a statement with
+  \texttt{pass}.
+\item \textbf{Change constants:} integers $\pm 1$, flip booleans,
+  empty strings.
+\item \textbf{Swap boolean operators:}
+  \texttt{and}~$\leftrightarrow$~\texttt{or}.
+\item \textbf{Remove return values:}
+  \texttt{return x}~$\rightarrow$~\texttt{return None}.
+\end{enumerate}
+
+For each function, Evidence generates up to 50 mutants by walking
+the function's AST and applying each applicable operator. Each mutant
+is compiled dynamically using Python's \texttt{compile} and
+\texttt{exec} built-ins, executed in a namespace derived from the
+original function's globals.
+
+Evidence tests each mutant against the function's postconditions and
+specification. A mutant is \emph{killed} if any postcondition fails or
+the output differs from the specification. A mutant that survives all
+checks indicates a gap in the contract: the postconditions and
+specification are not strong enough to distinguish the mutant from the
+original function.
+
+Evidence reports the \emph{mutation score}---the percentage of
+testable mutants killed---as a quantitative measure of contract
+strength. A mutation score of 80\% or higher indicates a passing
+grade. This score is directly actionable by a coding agent: a low
+score signals that the agent should request additional postconditions
+or a reference specification from the developer before considering
+its implementation verified.
+
+\subsection{Purity Analysis}
+\label{sec:purity}
+
+Evidence verifies the \dmark{pure} annotation through two
+complementary analyses.
+
+\paragraph{Static analysis.}
+Evidence parses the function's source code into an AST and walks the
+tree, flagging calls to known impure operations. Four categories of
+impurity are detected: IO operations (\texttt{print}, \texttt{open},
+\texttt{sys.stdout}), nondeterminism (\texttt{random.*},
+\texttt{time.time}, \texttt{datetime.now}), hash/address dependence
+(\texttt{id}, \texttt{hash}), and global mutation (\texttt{setattr},
+\texttt{exec}, \texttt{eval}, \texttt{global} statements). In
+seed-deterministic mode, Evidence suppresses nondeterminism warnings
+since the function is expected to use PRNGs.
+
+\paragraph{Dynamic verification.}
+Evidence calls the function twice with deep-copied, identical inputs.
+Between calls, Evidence redirects \texttt{sys.stdout} and
+\texttt{sys.stderr} to \texttt{StringIO} buffers to detect IO side
+effects. If the outputs differ or either call produces output on
+\texttt{stdout} or \texttt{stderr}, Evidence reports a purity
+violation. In seed-deterministic mode, Evidence seeds all PRNGs to the
+specified seed value before each call.
+
+\subsection{Property Inference}
+\label{sec:inference}
+
+Evidence can automatically infer structural properties of functions
+without developer input---a capability that is particularly valuable
+when an agent receives a function with no contracts and needs to
+bootstrap verification. The inference engine tests for six properties
+via short Hypothesis runs (200 examples each):
+
+\begin{itemize}
+\item \textbf{Shape preservation:} \texttt{len(result) == len(input)}
+  for list-to-list functions.
+\item \textbf{Sortedness:} the output is sorted.
+\item \textbf{Idempotence:} \texttt{f(f(x)) == f(x)} for single-argument
+  functions with matching input and output types.
+\item \textbf{Involution:} \texttt{f(f(x)) == x}.
+\item \textbf{Monotonicity:} \texttt{f(a) <= f(b)} when
+  \texttt{a <= b} for scalar functions.
+\item \textbf{Conservation:} preservation of aggregate quantities
+  (e.g., sum, count).
+\end{itemize}
+
+Additionally, Evidence mines function docstrings for contract-like
+statements using regular expressions, recognizing patterns such as
+``returns sorted,'' ``same length,'' ``non-negative,'' ``unique,'' and
+``idempotent.''
+
+\subsection{Optional Integrations}
+\label{sec:optional}
+
+Evidence supports two optional integrations via separate dependency
+groups.
+
+\paragraph{Symbolic verification.}
+With the \texttt{prove} extra (\texttt{pip install evidence[prove]}),
+Evidence integrates with CrossHair~\cite{crosshair} to attempt formal
+proofs of contract satisfaction. CrossHair uses symbolic execution to
+explore all feasible paths through a function. Evidence reports one of
+four results: \emph{verified} (all paths satisfy the contracts),
+\emph{disproved} (a concrete counterexample was found),
+\emph{inconclusive} (the analysis timed out or encountered an
+unsupported construct), or \emph{unavailable} (CrossHair is not
+installed).
+
+\paragraph{LLM-assisted specification mining.}
+With the \texttt{suggest} extra (\texttt{pip install
+  evidence[suggest]}), Evidence uses the Anthropic API to suggest
+postconditions and reference specifications. Evidence feeds the
+function's source code, existing contracts, and mutation score to a
+language model, which proposes new contracts. Evidence validates each
+suggestion against many generated examples before presenting it to the
+developer.
