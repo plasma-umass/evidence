@@ -72,7 +72,7 @@ the two disagree.
 | `max_examples` | `200` | Number of Hypothesis examples for the randomized pass |
 | `deadline_ms` | `None` | Per-example time limit in milliseconds |
 | `suppress_health_checks` | `(too_slow, filter_too_much)` | Hypothesis health checks to suppress |
-| `eq` | `None` | Custom equality function `(impl_result, spec_result) -> bool` |
+| `eq` | `None` | Custom equality: a callable `(a, b) -> bool`, or `"approx"` for floating-point tolerance |
 
 ### `@requires(pred)`
 
@@ -97,6 +97,24 @@ return value, and returns a bool. Multiple `@ensures` can be stacked.
 @ensures(lambda xs, result: all(x in xs for x in result))
 def my_func(xs: list[int]) -> list[int]:
     ...
+```
+
+### `@pure` / `@pure(seed=N, eq=fn)`
+
+Marks a function as pure (no side effects, deterministic). Evidence runs both
+static AST analysis (detecting I/O, global mutation, nondeterminism) and
+dynamic verification (calling the function twice with identical inputs and
+comparing outputs).
+
+```python
+@pure
+def double(x: int) -> int:
+    return x * 2
+
+@pure(seed=42)  # seed-deterministic: seeds PRNGs before each call
+def sample(x: int) -> int:
+    import random
+    return x + random.randint(0, 10)
 ```
 
 ## Custom type strategies
@@ -143,6 +161,11 @@ containing the module or using `pip install -e .` is the easiest way.
 | `-q`, `--quiet` | Suppress per-obligation lines; only print the summary and set the exit code |
 | `--json` | Print results as a JSON array to stdout; suppresses human-readable output |
 | `--no-color` | Disable ANSI colors (also respected via the `NO_COLOR` environment variable) |
+| `--coverage` | Measure line/branch coverage per function (requires `pip install evidence[coverage]`) |
+| `--mutate` | Run mutation testing and report mutation score |
+| `--prove` | Attempt symbolic verification via CrossHair/Z3 (requires `pip install evidence[prove]`) |
+| `--suggest` | Use an LLM to suggest postconditions and specs (requires `pip install evidence[suggest]`) |
+| `--infer` | Infer structural properties from function behavior |
 
 ### Exit codes
 
@@ -202,6 +225,91 @@ Each run writes two files to the output directory (default `.evidence/`):
 - **`<module>.trust.json`** -- summary with module name, timestamp, and the
   list of functions that were checked.
 
+## Advanced features
+
+### Coverage reporting (`--coverage`)
+
+Measures line and branch coverage per function during test execution using
+[coverage.py](https://coverage.readthedocs.io/).
+
+```bash
+python -m evidence example_sort --coverage -v
+```
+
+### Mutation testing (`--mutate`)
+
+Generates AST-level mutants of each function (7 operators: flip comparisons,
+swap arithmetic, negate conditions, delete statements, change constants, swap
+boolean ops, remove return values) and checks whether Evidence's contracts and
+specs catch them. Reports a mutation score.
+
+```bash
+python -m evidence example_sort --mutate -v
+```
+
+### Symbolic verification (`--prove`)
+
+Attempts to symbolically prove function correctness using the
+[CrossHair](https://github.com/pschanely/CrossHair) solver backend via
+`hypothesis-crosshair`. Results are `verified`, `disproved`, or `inconclusive`.
+
+```bash
+pip install evidence[prove]
+python -m evidence example_sort --prove -v
+```
+
+### Spec inference (`--infer`)
+
+Automatically infers structural properties of functions via quick Hypothesis
+runs and docstring mining. Checks for shape preservation, sortedness,
+idempotence, involution, and more.
+
+```bash
+python -m evidence example_sort --infer -v
+```
+
+### LLM-assisted spec mining (`--suggest`)
+
+Uses the Anthropic API to suggest postconditions and reference specifications,
+then validates them. Requires `ANTHROPIC_API_KEY` in the environment.
+
+```bash
+pip install evidence[suggest]
+python -m evidence example_sort --suggest -v
+```
+
+### Numeric/ML support (`eq="approx"`)
+
+For floating-point and numeric code, use `eq="approx"` with `@against` for
+approximate equality. Auto-dispatches to `np.allclose`, `torch.allclose`, or
+`math.isclose` based on return type.
+
+```python
+from evidence import against, spec
+from evidence._numeric import register_numeric_strategies
+
+register_numeric_strategies()  # registers numpy/pandas/torch strategies
+
+@spec
+def softmax_spec(xs: list[float]) -> list[float]:
+    ...
+
+@against(softmax_spec, eq="approx")
+def softmax(xs: list[float]) -> list[float]:
+    ...
+```
+
+### Optional dependency groups
+
+```bash
+pip install evidence[coverage]   # coverage.py
+pip install evidence[prove]      # hypothesis-crosshair, crosshair-tool
+pip install evidence[suggest]    # anthropic
+pip install evidence[numeric]    # numpy, pandas
+pip install evidence[ml]         # torch
+pip install evidence[all]        # everything
+```
+
 ## How it works
 
 For each decorated function, Evidence runs two phases:
@@ -213,24 +321,36 @@ For each decorated function, Evidence runs two phases:
 2. **Spec equivalence** -- if `@against(spec_fn)` is present, search for a
    counterexample where the implementation and spec disagree. This uses
    `hypothesis.find` for a deterministic probe, then falls back to a randomized
-   `@given`-based search for higher confidence.
+   `@given`-based search for higher confidence. When a counterexample is found,
+   Hypothesis shrinks it to a minimal failing input.
+
+Optional phases (enabled via CLI flags) add purity checking, coverage
+measurement, mutation testing, symbolic verification, property inference, and
+LLM-assisted spec mining.
 
 ## Examples
 
-The `examples/` directory contains three modules with intentionally buggy
-implementations:
+The `examples/` directory contains 10 modules with intentionally buggy
+implementations that Evidence catches:
 
-- **`example_sort.py`** -- a sort that fails on lists starting with `0`
-- **`example_runs.py`** -- a run-length grouping that drops the final group
-- **`example_intervals.py`** -- an interval normalizer that fails to merge
-  adjacent (non-overlapping) intervals; also demonstrates `register_strategy`
-  and `@requires` for custom types
+| Module | Domain | Bugs | Features demonstrated |
+|--------|--------|------|----------------------|
+| `example_sort` | Sorting | Fails on lists starting with `0` | `@spec`, `@against`, `@ensures` |
+| `example_runs` | Run-length grouping | Drops the final group | Multiple `@ensures` |
+| `example_intervals` | Interval merging | Fails on adjacent intervals | `register_strategy`, `@requires` for custom types |
+| `example_numeric` | Numeric/ML | Softmax overflow on large inputs | `@pure`, `eq="approx"`, numeric strategies |
+| `example_strings` | Text processing | Whitespace splitting, palindrome filter, RLE off-by-one | `@spec`, `@against`, `@ensures` |
+| `example_math` | Number theory | GCD sign bug, Fibonacci off-by-one | `@pure`, `@requires`, `@ensures` |
+| `example_sets` | Collections | `unique()` loses order, `intersect()` leaks duplicates | `@spec`, multiple postconditions |
+| `example_stack` | Data structures | `push_many()` reverses order | Dataclass usage, `@ensures` |
+| `example_search` | Search algorithms | Binary search off-by-one, closest-element misses neighbor | `@pure`, sorted-input `@requires` |
+| `example_compression` | Encoding | Checksum uses XOR instead of sum | `@pure`, round-trip properties |
 
-Run any of them to see Evidence catch the bugs:
+Run any of them:
 
 ```bash
 cd examples
 python -m evidence example_sort -v
-python -m evidence example_runs -v
-python -m evidence example_intervals -v
+python -m evidence example_math -v --mutate --infer
+python -m evidence example_compression -v --coverage
 ```
